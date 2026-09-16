@@ -22,6 +22,12 @@ so the existing `.p12`, its password and the `.p8` can be reused as this repo's
 secrets. Steps 1, 3 and 4 (App ID, provisioning profile, app record) are
 per-app and must be done for opencheckers.
 
+**Most of this is scripted.** `scripts/asc_setup.py` does steps 1 and 3 through
+the App Store Connect API (App ID, then the App Store profile bound to the
+certificate whose SHA-1 you pass), and after step 4 sets the category, content
+rights, age rating, privacy policy URL and a free price. Step 4 (the app
+record) and the App Privacy label have no API and stay in the console.
+
 ---
 
 ## 1. Register the App ID
