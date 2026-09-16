@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Minimal NativeActivity manifest: the whole game is native C, so there is no
+  application Java/Kotlin code. Android loads libopencheckers.so directly via
+  android.app.NativeActivity (the "android.app.lib_name" meta-data names the .so
+  without its "lib" prefix or ".so" suffix). Portrait-locked to match the
+  reflowed phone layout; fullscreen with no title bar.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          package="com.danheskett.opencheckers">
+
+    <!-- versionCode/versionName are intentionally absent: aapt/aapt2
+         - -version-code/- -version-name only inject when the manifest has none,
+         so hardcoding them here would silently pin every Play upload to 1. -->
+    <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="36" />
+
+    <uses-feature android:glEsVersion="0x00020000" android:required="true" />
+
+    <application android:label="opencheckers"
+                 android:icon="@mipmap/ic_launcher"
+                 android:hasCode="true"
+                 android:allowBackup="false">
+
+        <!-- Apps targeting API 36 have android:screenOrientation ignored on any
+             display >= sw600dp: tablets and unfolded foldables get a resizable
+             window whatever the activity asks for. The Android draw path here is
+             portrait-only (src/render_portrait.c), so this property opts
+             back into the pre-36 behaviour and keeps the portrait lock everywhere.
+
+             This is a deferral, not a fix: Google removes the opt-out at API 37,
+             at which point the renderer needs a real large-screen layout. -->
+        <property android:name="android.window.PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY"
+                  android:value="true" />
+
+        <activity android:name="com.danheskett.opencheckers.OpencheckersActivity"
+                  android:label="opencheckers"
+                  android:screenOrientation="portrait"
+                  android:configChanges="orientation|keyboardHidden|screenSize"
+                  android:exported="true"
+                  android:theme="@style/OpencheckersTheme">
+
+            <!-- Names the native library (libopencheckers.so) NativeActivity loads. -->
+            <meta-data android:name="android.app.lib_name" android:value="opencheckers" />
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
