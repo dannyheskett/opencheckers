@@ -1,0 +1,354 @@
+// Native Metal backend for the gfx primitive layer (iOS) — no raylib.
+//
+// Immediate-mode design: each frame the gfx_* calls append triangles (colored,
+// or textured from a font atlas) to a CPU vertex list in pixel coordinates;
+// gfx_end_frame uploads them and issues one draw. A single pipeline handles both
+// solid fills (sampling a white texel in the atlas) and text (sampling glyph
+// coverage), so there is one shader and one draw call per frame.
+#import <Metal/Metal.h>
+#import <QuartzCore/CAMetalLayer.h>
+
+#include <vector>
+#include <string.h>
+#include <math.h>
+
+#import "gfx.h"
+#import "gfx_metal.h"
+#include "font_atlas.h"  // bundled Nunito font, baked (generated), for parity
+
+// --- Vertex layout ----------------------------------------------------------
+struct GVert { float x, y, u, v, r, g, b, a; }; // 32 bytes; matches packed MSL
+
+static id<MTLDevice>          s_device;
+static id<MTLCommandQueue>    s_queue;
+static CAMetalLayer*          s_layer;
+static id<MTLRenderPipelineState> s_pipeline;
+static id<MTLSamplerState>    s_sampler;
+static id<MTLTexture>         s_atlas;
+static int                    s_glyph_index[256]; // codepoint -> oc_font_glyphs index
+
+static std::vector<GVert> s_verts;
+static float s_cr = 0, s_cg = 0, s_cb = 0, s_ca = 1; // clear colour
+static int   s_fw = 1, s_fh = 1;                      // full drawable (px)
+static int   s_ox = 0, s_oy = 0;                      // safe-area origin (px)
+
+// Triple-buffered vertex buffers, reused across frames (grown on demand) instead
+// of allocating one per frame; the semaphore stops us overwriting a buffer the
+// GPU is still reading.
+#define OC_INFLIGHT 3
+static id<MTLBuffer>        s_vbuf[OC_INFLIGHT];
+static NSUInteger           s_vcap[OC_INFLIGHT];
+static int                  s_frame_idx = 0;
+static dispatch_semaphore_t s_inflight;
+
+static const char* kShader = R"(
+#include <metal_stdlib>
+using namespace metal;
+struct Vertex   { packed_float2 pos; packed_float2 uv; packed_float4 color; };
+struct Uniforms { float2 viewport; float2 origin; };
+struct VOut     { float4 position [[position]]; float2 uv; float4 color; };
+vertex VOut v_main(uint vid [[vertex_id]],
+                   const device Vertex* verts [[buffer(0)]],
+                   constant Uniforms& u [[buffer(1)]]) {
+    Vertex v = verts[vid];
+    float2 p = v.pos + u.origin; // shift the game's (0,0) to the safe-area corner
+    float2 ndc = float2(p.x / u.viewport.x * 2.0 - 1.0,
+                        1.0 - p.y / u.viewport.y * 2.0);
+    VOut o; o.position = float4(ndc, 0.0, 1.0); o.uv = v.uv; o.color = v.color; return o;
+}
+fragment float4 f_main(VOut in [[stage_in]],
+                       texture2d<float> atlas [[texture(0)]],
+                       sampler samp [[sampler(0)]]) {
+    float a = atlas.sample(samp, in.uv).r; // single-channel (R8) coverage
+    return float4(in.color.rgb, in.color.a * a);
+}
+)";
+
+// --- Setup ------------------------------------------------------------------
+static void build_font_atlas(void) {
+    // Upload the baked Nunito alpha atlas as a single-channel texture. The
+    // generator already forced the bottom-right 8x8 block opaque, which is the
+    // "white block" solid primitives sample (see uv_white).
+    static unsigned char atlas[OC_FONT_ATLAS_W * OC_FONT_ATLAS_H];
+    memcpy(atlas, oc_font_atlas_alpha, sizeof(atlas));
+
+    MTLTextureDescriptor* td =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR8Unorm
+                                                           width:OC_FONT_ATLAS_W
+                                                          height:OC_FONT_ATLAS_H mipmapped:NO];
+    s_atlas = [s_device newTextureWithDescriptor:td];
+    [s_atlas replaceRegion:MTLRegionMake2D(0, 0, OC_FONT_ATLAS_W, OC_FONT_ATLAS_H)
+               mipmapLevel:0 withBytes:atlas bytesPerRow:OC_FONT_ATLAS_W];
+
+    // Codepoint -> glyph-array index (fallback '?').
+    for (int i = 0; i < 256; i++) s_glyph_index[i] = -1;
+    for (int i = 0; i < OC_FONT_GLYPH_COUNT; i++) {
+        int v = oc_font_glyphs[i].value;
+        if (v >= 0 && v < 256) s_glyph_index[v] = i;
+    }
+}
+
+// Glyph index for a codepoint, falling back to '?' then 0.
+static int glyph_of(int cp) {
+    int gi = (cp >= 0 && cp < 256) ? s_glyph_index[cp] : -1;
+    if (gi < 0) gi = s_glyph_index[(unsigned char)'?'];
+    if (gi < 0) gi = 0;
+    return gi;
+}
+
+void gfx_metal_attach(CAMetalLayer* layer) {
+    s_device = MTLCreateSystemDefaultDevice();
+    s_queue  = [s_device newCommandQueue];
+    s_inflight = dispatch_semaphore_create(OC_INFLIGHT);
+    layer.device          = s_device;
+    layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
+    layer.framebufferOnly = YES;
+    s_layer  = layer;
+
+    NSError* err = nil;
+    id<MTLLibrary> lib = [s_device newLibraryWithSource:[NSString stringWithUTF8String:kShader]
+                                                options:nil error:&err];
+    MTLRenderPipelineDescriptor* pd = [[MTLRenderPipelineDescriptor alloc] init];
+    pd.vertexFunction   = [lib newFunctionWithName:@"v_main"];
+    pd.fragmentFunction = [lib newFunctionWithName:@"f_main"];
+    pd.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+    pd.colorAttachments[0].blendingEnabled = YES;
+    pd.colorAttachments[0].sourceRGBBlendFactor        = MTLBlendFactorSourceAlpha;
+    pd.colorAttachments[0].destinationRGBBlendFactor   = MTLBlendFactorOneMinusSourceAlpha;
+    pd.colorAttachments[0].sourceAlphaBlendFactor      = MTLBlendFactorSourceAlpha;
+    pd.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+    s_pipeline = [s_device newRenderPipelineStateWithDescriptor:pd error:&err];
+
+    MTLSamplerDescriptor* sd = [[MTLSamplerDescriptor alloc] init];
+    sd.minFilter = MTLSamplerMinMagFilterLinear; // smooth Nunito, matching raylib's bilinear
+    sd.magFilter = MTLSamplerMinMagFilterLinear;
+    s_sampler = [s_device newSamplerStateWithDescriptor:sd];
+
+    build_font_atlas();
+}
+
+void gfx_metal_set_viewport(int full_w, int full_h, int origin_x, int origin_y) {
+    s_fw = full_w > 0 ? full_w : 1;
+    s_fh = full_h > 0 ? full_h : 1;
+    s_ox = origin_x;
+    s_oy = origin_y;
+}
+
+// --- Vertex helpers ---------------------------------------------------------
+static inline void uv_white(float* u, float* v) {
+    // Centre of the forced-opaque bottom-right 8x8 block. Sampling 4px in from
+    // the corner keeps the LINEAR footprint entirely inside the white block, so
+    // solid fills read coverage 1.0 (a single texel would bleed under linear).
+    *u = (OC_FONT_ATLAS_W - 4.0f) / (float)OC_FONT_ATLAS_W;
+    *v = (OC_FONT_ATLAS_H - 4.0f) / (float)OC_FONT_ATLAS_H;
+}
+
+static inline void push(float x, float y, float u, float v, Color c) {
+    GVert g = { x, y, u, v, c.r / 255.0f, c.g / 255.0f, c.b / 255.0f, c.a / 255.0f };
+    s_verts.push_back(g);
+}
+
+// Solid triangle (uv fixed to the white texel).
+static void tri_solid(float x0, float y0, float x1, float y1, float x2, float y2, Color c) {
+    float u, v; uv_white(&u, &v);
+    push(x0, y0, u, v, c); push(x1, y1, u, v, c); push(x2, y2, u, v, c);
+}
+
+static void quad_solid(float x, float y, float w, float h, Color c) {
+    tri_solid(x, y, x + w, y, x + w, y + h, c);
+    tri_solid(x, y, x + w, y + h, x, y + h, c);
+}
+
+// --- Frame lifecycle --------------------------------------------------------
+void gfx_begin_frame(void) {
+    s_verts.clear();
+    s_cr = s_cg = s_cb = 0; s_ca = 1;
+}
+
+void gfx_clear(Color c) {
+    s_cr = c.r / 255.0f; s_cg = c.g / 255.0f; s_cb = c.b / 255.0f; s_ca = c.a / 255.0f;
+}
+
+void gfx_end_frame(void) {
+    id<CAMetalDrawable> drawable = [s_layer nextDrawable];
+    if (!drawable) return;
+
+    dispatch_semaphore_wait(s_inflight, DISPATCH_TIME_FOREVER);
+    int fi = s_frame_idx;
+    s_frame_idx = (s_frame_idx + 1) % OC_INFLIGHT;
+
+    id<MTLCommandBuffer> cmd = [s_queue commandBuffer];
+    __block dispatch_semaphore_t sem = s_inflight;
+    [cmd addCompletedHandler:^(id<MTLCommandBuffer> _Nonnull b) { (void)b; dispatch_semaphore_signal(sem); }];
+
+    MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
+    rp.colorAttachments[0].texture     = drawable.texture;
+    rp.colorAttachments[0].loadAction  = MTLLoadActionClear;
+    rp.colorAttachments[0].clearColor  = MTLClearColorMake(s_cr, s_cg, s_cb, s_ca);
+    rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+    id<MTLRenderCommandEncoder> enc = [cmd renderCommandEncoderWithDescriptor:rp];
+
+    if (!s_verts.empty() && s_pipeline) {
+        NSUInteger need = s_verts.size() * sizeof(GVert);
+        if (s_vcap[fi] < need) {
+            s_vbuf[fi] = [s_device newBufferWithLength:need options:MTLResourceStorageModeShared];
+            s_vcap[fi] = need;
+        }
+        memcpy(s_vbuf[fi].contents, s_verts.data(), need);
+        float uni[4] = { (float)s_fw, (float)s_fh, (float)s_ox, (float)s_oy };
+        [enc setRenderPipelineState:s_pipeline];
+        [enc setVertexBuffer:s_vbuf[fi] offset:0 atIndex:0];
+        [enc setVertexBytes:uni length:sizeof(uni) atIndex:1];
+        [enc setFragmentTexture:s_atlas atIndex:0];
+        [enc setFragmentSamplerState:s_sampler atIndex:0];
+        [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:s_verts.size()];
+    }
+    [enc endEncoding];
+    [cmd presentDrawable:drawable];
+    [cmd commit];
+}
+
+// --- Primitives -------------------------------------------------------------
+void gfx_rect(int x, int y, int w, int h, Color c) { quad_solid(x, y, w, h, c); }
+
+void gfx_rect_lines(int x, int y, int w, int h, Color c) {
+    quad_solid(x, y, w, 1, c);             // top
+    quad_solid(x, y + h - 1, w, 1, c);     // bottom
+    quad_solid(x, y, 1, h, c);             // left
+    quad_solid(x + w - 1, y, 1, h, c);     // right
+}
+
+void gfx_line(int x1, int y1, int x2, int y2, Color c) {
+    float dx = x2 - x1, dy = y2 - y1;
+    float len = sqrtf(dx * dx + dy * dy);
+    if (len < 0.001f) { quad_solid(x1, y1, 1, 1, c); return; }
+    float nx = -dy / len * 0.5f, ny = dx / len * 0.5f; // half-thickness normal (1px)
+    tri_solid(x1 + nx, y1 + ny, x2 + nx, y2 + ny, x2 - nx, y2 - ny, c);
+    tri_solid(x1 + nx, y1 + ny, x2 - nx, y2 - ny, x1 - nx, y1 - ny, c);
+}
+
+// Curves are tessellated at roughly one segment per 4px of arc, clamped so tiny
+// target dots stay round and large pieces don't balloon the vertex list.
+static int arc_segments(float radius, float sweep) {
+    int n = (int)ceilf(radius * sweep / 4.0f);
+    int lo = (int)ceilf(12.0f * sweep / (2.0f * (float)M_PI));
+    if (n < lo) n = lo;
+    if (n < 2)  n = 2;
+    if (n > 96) n = 96;
+    return n;
+}
+
+// Filled pie wedge from angle a0 to a1 (radians, screen space: y down).
+static void fan_solid(float cx, float cy, float r, float a0, float a1, Color c) {
+    int n = arc_segments(r, a1 - a0);
+    float step = (a1 - a0) / n;
+    for (int i = 0; i < n; i++) {
+        float t0 = a0 + step * i, t1 = t0 + step;
+        tri_solid(cx, cy, cx + cosf(t0) * r, cy + sinf(t0) * r,
+                  cx + cosf(t1) * r, cy + sinf(t1) * r, c);
+    }
+}
+
+// 1px arc (a band from r-0.5 to r+0.5), the Metal stand-in for raylib's line
+// circles.
+static void arc_lines(float cx, float cy, float r, float a0, float a1, Color c) {
+    int n = arc_segments(r, a1 - a0);
+    float step = (a1 - a0) / n;
+    float ri = r - 0.5f, ro = r + 0.5f;
+    for (int i = 0; i < n; i++) {
+        float t0 = a0 + step * i, t1 = t0 + step;
+        float c0 = cosf(t0), s0 = sinf(t0), c1 = cosf(t1), s1 = sinf(t1);
+        tri_solid(cx + c0 * ri, cy + s0 * ri, cx + c0 * ro, cy + s0 * ro, cx + c1 * ro, cy + s1 * ro, c);
+        tri_solid(cx + c0 * ri, cy + s0 * ri, cx + c1 * ro, cy + s1 * ro, cx + c1 * ri, cy + s1 * ri, c);
+    }
+}
+
+void gfx_circle(int cx, int cy, float radius, Color c) {
+    if (radius <= 0.0f) return;
+    fan_solid((float)cx, (float)cy, radius, 0.0f, 2.0f * (float)M_PI, c);
+}
+
+void gfx_circle_lines(int cx, int cy, float radius, Color c) {
+    if (radius <= 0.0f) return;
+    arc_lines((float)cx, (float)cy, radius, 0.0f, 2.0f * (float)M_PI, c);
+}
+
+void gfx_triangle(float x1, float y1, float x2, float y2, float x3, float y3, Color c) {
+    tri_solid(x1, y1, x2, y2, x3, y3, c); // no culling, so winding is irrelevant here
+}
+
+static int clamp_radius(int w, int h, int radius) {
+    int m = ((w < h) ? w : h) / 2;
+    if (radius > m) radius = m;
+    return (radius < 0) ? 0 : radius;
+}
+
+void gfx_rect_rounded(int x, int y, int w, int h, int radius, Color c) {
+    int r = clamp_radius(w, h, radius);
+    if (r == 0) { quad_solid(x, y, w, h, c); return; }
+    const float pi = (float)M_PI;
+    quad_solid(x + r, y, w - 2 * r, h, c);         // centre column, full height
+    quad_solid(x, y + r, r, h - 2 * r, c);         // left band
+    quad_solid(x + w - r, y + r, r, h - 2 * r, c); // right band
+    fan_solid(x + r,     y + r,     r, pi,        1.5f * pi, c); // top-left
+    fan_solid(x + w - r, y + r,     r, 1.5f * pi, 2.0f * pi, c); // top-right
+    fan_solid(x + w - r, y + h - r, r, 0.0f,      0.5f * pi, c); // bottom-right
+    fan_solid(x + r,     y + h - r, r, 0.5f * pi, pi,        c); // bottom-left
+}
+
+void gfx_rect_rounded_lines(int x, int y, int w, int h, int radius, Color c) {
+    int r = clamp_radius(w, h, radius);
+    if (r == 0) { gfx_rect_lines(x, y, w, h, c); return; }
+    const float pi = (float)M_PI;
+    quad_solid(x + r, y, w - 2 * r, 1, c);         // top
+    quad_solid(x + r, y + h - 1, w - 2 * r, 1, c); // bottom
+    quad_solid(x, y + r, 1, h - 2 * r, c);         // left
+    quad_solid(x + w - 1, y + r, 1, h - 2 * r, c); // right
+    arc_lines(x + r - 0.5f,     y + r - 0.5f,     r - 0.5f, pi,        1.5f * pi, c);
+    arc_lines(x + w - r + 0.5f, y + r - 0.5f,     r - 0.5f, 1.5f * pi, 2.0f * pi, c);
+    arc_lines(x + w - r + 0.5f, y + h - r + 0.5f, r - 0.5f, 0.0f,      0.5f * pi, c);
+    arc_lines(x + r - 0.5f,     y + h - r + 0.5f, r - 0.5f, 0.5f * pi, pi,        c);
+}
+
+// Text: port of raylib's DrawTextEx with the bundled Nunito font — scaleFactor =
+// fontSize/baseSize, and the same proportional tracking (fontSize*0.05) the
+// raylib backend uses, so the two platforms lay out identically regardless of
+// each atlas's bake size. Draws each glyph's atlas rect at its offset.
+void gfx_text(const char* text, int x, int y, int font_size, Color c) {
+    float scale = (float)font_size / OC_FONT_BASE_SIZE;
+    float spacing = font_size * 0.05f;
+    float pen = (float)x;
+    for (const unsigned char* p = (const unsigned char*)text; *p; p++) {
+        int cp = *p;
+        OCGlyph g = oc_font_glyphs[glyph_of(cp)];
+        if (cp != ' ') {
+            float gx = pen + g.ox * scale, gy = y + g.oy * scale;
+            float gw = g.rw * scale,       gh = g.rh * scale;
+            float u0 = g.rx / (float)OC_FONT_ATLAS_W, v0 = g.ry / (float)OC_FONT_ATLAS_H;
+            float u1 = (g.rx + g.rw) / (float)OC_FONT_ATLAS_W;
+            float v1 = (g.ry + g.rh) / (float)OC_FONT_ATLAS_H;
+            push(gx,      gy,      u0, v0, c); push(gx + gw, gy,      u1, v0, c); push(gx + gw, gy + gh, u1, v1, c);
+            push(gx,      gy,      u0, v0, c); push(gx + gw, gy + gh, u1, v1, c); push(gx,      gy + gh, u0, v1, c);
+        }
+        float adv = (g.adv != 0) ? (float)g.adv : g.rw; // DrawTextEx uses recs.width when advanceX==0
+        pen += adv * scale + spacing;
+    }
+}
+
+// MeasureTextEx: sum advances (recs.width + offsetX when advanceX==0), scaled,
+// plus inter-glyph spacing. Matches gfx_text's tracking so centering is correct.
+int gfx_measure_text(const char* text, int font_size) {
+    float spacing = font_size * 0.05f;
+    float scale = (float)font_size / OC_FONT_BASE_SIZE;
+    float tw = 0.0f;
+    int count = 0;
+    for (const unsigned char* p = (const unsigned char*)text; *p; p++) {
+        OCGlyph g = oc_font_glyphs[glyph_of(*p)];
+        tw += (g.adv != 0) ? (float)g.adv : (g.rw + g.ox);
+        count++;
+    }
+    return (int)(tw * scale + (count > 0 ? (count - 1) : 0) * spacing);
+}
+
+// The atlas is built in gfx_metal_attach(); nothing to lazily load here.
+void gfx_font_init(void) {}
