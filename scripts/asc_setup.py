@@ -10,7 +10,8 @@ record, and the App Privacy label.
                 bound to the team's existing Apple Distribution certificate,
                 and write the .mobileprovision to --out
     app-info    once the app record exists: category, content rights, age
-                rating (all "None" -> 4+), privacy policy URL, and a free price
+                rating (all "None" -> 4+), privacy policy URL, a free price, and
+                availability in every territory except mainland China
 
 The distribution certificate is team-wide and shared by every app, so this never
 creates one: `profile` picks the certificate whose SHA-1 matches --cert-sha1
@@ -55,7 +56,7 @@ AGE_NONE = {
 AGE_FALSE = {
     "gambling", "unrestrictedWebAccess", "lootBox", "messagingAndChat",
     "userGeneratedContent", "advertising", "parentalControls", "ageAssurance",
-    "healthOrWellnessTopics",
+    "healthOrWellnessTopics", "socialMedia",
 }
 
 
@@ -186,6 +187,40 @@ def app_info(asc):
         }}],
     })
     print("price: free")
+
+    availability(asc, app)
+
+
+# Mainland China requires a government games licence (ISBN) number for any game,
+# which this app does not have, so it is left out; every other territory is on,
+# and territories Apple adds later are opted into automatically.
+EXCLUDED_TERRITORIES = {"CHN"}
+
+
+def availability(asc, app):
+    territories = []
+    url = "/v1/territories?limit=200"
+    while url:
+        r = asc.call("GET", url)
+        territories += [t["id"] for t in r.get("data", [])]
+        url = r.get("links", {}).get("next")
+    # Apple wants every territory in the request, so excluded ones are sent as
+    # available=false rather than left out.
+    items = [{"type": "territoryAvailabilities", "id": f"${{t{t}}}",
+              "attributes": {"available": t not in EXCLUDED_TERRITORIES},
+              "relationships": {"territory": {"data": {"type": "territories", "id": t}}}}
+             for t in sorted(territories)]
+    asc.call("POST", "/v2/appAvailabilities", {
+        "data": {"type": "appAvailabilities",
+                 "attributes": {"availableInNewTerritories": True},
+                 "relationships": {
+                     "app": {"data": {"type": "apps", "id": app}},
+                     "territoryAvailabilities": {"data": [{"type": i["type"], "id": i["id"]} for i in items]},
+                 }},
+        "included": items,
+    })
+    on = sum(1 for i in items if i["attributes"]["available"])
+    print(f"availability: {on} of {len(items)} territories (excluded: {', '.join(sorted(EXCLUDED_TERRITORIES))})")
 
 
 def main():
