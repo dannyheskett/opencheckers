@@ -359,7 +359,16 @@ def cmd_release(asc, args):
     # "What's New" is REQUIRED on an update, and a submission without it fails
     # Apple's validation. An unattended release has no human to type it, so it
     # comes from the release notes the caller passes.
-    if args.whats_new:
+    #
+    # The app's FIRST version is the exception: there is nothing to be new
+    # relative to, and Apple refuses the field outright (409 "Attribute
+    # 'whatsNew' cannot be edited at this time"). A first version is one with no
+    # other version record beside it.
+    others = [v for v in asc.call("GET", f"/v1/apps/{app}/appStoreVersions?limit=10").get("data", [])
+              if v["id"] != version_id]
+    if args.whats_new and not others and not is_placeholder(version_id):
+        print("  whats-new: skipped (first version of the app)")
+    elif args.whats_new:
         # A dry run never created the version, so version_id is a placeholder and
         # there is nothing real to look the localization up on. GETs are not
         # suppressed by --dry-run (they are how current state is read), so this
