@@ -4,9 +4,25 @@
 #define _FILE_OFFSET_BITS 64
 
 #include "recorder.h"
+#include "platform.h"
 
-#include "minih264e.h"  // declarations only (implementation is in encode_h264.c)
-#include "minimp4.h"    // declarations only (implementation is in encode_mux.c)
+// The frame-fidelity mp4 recorder depends on the vendored minih264/minimp4
+// single-header libraries and writes its output to the working directory.
+// Neither is available (nor meaningful) on the mobile/web builds, so the entire
+// implementation is compiled out there and replaced with no-op stubs at the
+// bottom of the file.
+#ifndef OC_TOUCH
+
+// Declarations only (implementations live in encode_h264.c / encode_mux.c). The
+// vendored headers trip a clang-only typedef-redefinition warning under -std=c99;
+// suppress it so the project's own code stays warning-clean.
+#pragma GCC diagnostic push
+#if defined(__clang__)
+#pragma clang diagnostic ignored "-Wtypedef-redefinition"
+#endif
+#include "minih264e.h"
+#include "minimp4.h"
+#pragma GCC diagnostic pop
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -207,3 +223,15 @@ void recorder_capture(const RenderTexture2D* canvas) {
     }
     s_frame++;
 }
+
+#else // OC_TOUCH — no video pipeline on mobile / web; keep the API as no-ops.
+
+bool recorder_start(const char* path)                { (void)path; return false; }
+void recorder_stop(void)                             { }
+bool recorder_toggle(void)                           { return false; }
+bool recorder_active(void)                           { return false; }
+#if !defined(PLATFORM_IOS)
+void recorder_capture(const RenderTexture2D* canvas) { (void)canvas; }
+#endif
+
+#endif // OC_TOUCH

@@ -1,7 +1,9 @@
-// Unit tests for opencheckers' game logic — no raylib, no window. game.c is
-// included directly so its file-static helpers are visible.
+// Unit tests for opencheckers' game logic and the fixed-timestep clock — no
+// raylib, no window. game.c is included directly so its file-static helpers are
+// visible.
 // Built and run by `make test`; a non-zero exit means a failure.
 #include "../src/game.c"
+#include "../src/tick.c"
 #include <stdio.h>
 #include <assert.h>
 
@@ -140,6 +142,39 @@ static void test_ai(void) {
     PASS("ai");
 }
 
+// --------------------------------------------------------------------------
+// Fixed-timestep accumulator (tick.c): the AI's thinking delay is counted in
+// these steps, so it must hold 60 steps/s on any display refresh.
+static void test_sim_clock(void) {
+    SimClock c = {0};
+
+    // Exactly one step's worth of time -> one step, nothing banked.
+    if (sim_clock_advance(&c, SIM_DT) != 1 || c.accum != 0.0) FAIL("sim_clock", "one step");
+
+    // Half a step banks with no step; the following half completes one.
+    c.accum = 0.0;
+    if (sim_clock_advance(&c, SIM_DT / 2) != 0) FAIL("sim_clock", "half step stepped");
+    if (sim_clock_advance(&c, SIM_DT / 2) != 1) FAIL("sim_clock", "banked half lost");
+
+    // A 120 Hz display (half-steps) averages to exactly 60 steps over one second.
+    c.accum = 0.0;
+    int total = 0;
+    for (int i = 0; i < 120; i++) total += sim_clock_advance(&c, SIM_DT / 2);
+    if (total != 60) FAIL("sim_clock", "120 Hz != 60 steps/s");
+
+    // Spiral guard: a long stall runs at most SIM_MAX_STEPS and drops the backlog.
+    c.accum = 0.0;
+    if (sim_clock_advance(&c, 100.0) != SIM_MAX_STEPS || c.accum != 0.0) FAIL("sim_clock", "spiral guard");
+
+    // A stalled / backward clock contributes nothing; reset drops banked time.
+    c.accum = 0.0;
+    if (sim_clock_advance(&c, -1.0) != 0 || c.accum != 0.0) FAIL("sim_clock", "backward clock");
+    c.accum = 1.0;
+    sim_clock_reset(&c);
+    if (c.accum != 0.0) FAIL("sim_clock", "reset");
+    PASS("sim_clock");
+}
+
 int main(void) {
     test_setup();
     test_step_dirs();
@@ -148,6 +183,7 @@ int main(void) {
     test_crown_ends_turn();
     test_win_on_capture();
     test_ai();
+    test_sim_clock();
     printf("\nAll tests passed.\n");
     return 0;
 }
