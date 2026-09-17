@@ -400,11 +400,21 @@ def cmd_release(asc, args):
         print("  not submitting (pass --submit to send it to review)")
         return 0
 
-    submission = asc.call("POST", "/v1/reviewSubmissions", {
-        "data": {"type": "reviewSubmissions",
-                 "attributes": {"platform": "IOS"},
-                 "relationships": {"app": {"data": {"type": "apps", "id": app}}}}})
-    sub_id = (submission.get("data") or {}).get("id", "<submission>")
+    # Reuse an unsent draft if one exists. Creating the submission is the step
+    # that succeeds even when the version is not reviewable, so every failed
+    # attempt used to leave an empty READY_FOR_REVIEW draft behind -- and Apple
+    # refuses to cancel an empty one, so they pile up in the console.
+    drafts = asc.call("GET", f"/v1/reviewSubmissions?filter[app]={app}"
+                             "&filter[platform]=IOS&filter[state]=READY_FOR_REVIEW")
+    if drafts.get("data"):
+        sub_id = drafts["data"][0]["id"]
+        print(f"  reusing draft submission {sub_id}")
+    else:
+        submission = asc.call("POST", "/v1/reviewSubmissions", {
+            "data": {"type": "reviewSubmissions",
+                     "attributes": {"platform": "IOS"},
+                     "relationships": {"app": {"data": {"type": "apps", "id": app}}}}})
+        sub_id = (submission.get("data") or {}).get("id", "<submission>")
     asc.call("POST", "/v1/reviewSubmissionItems", {
         "data": {"type": "reviewSubmissionItems",
                  "relationships": {
