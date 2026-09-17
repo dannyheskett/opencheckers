@@ -36,6 +36,8 @@ static const Color BLK_PIECE   = { 48,  48,  56, 255};
 static const Color BLK_HI      = {110, 112, 124, 255};
 static const Color BLK_LO      = { 20,  20,  26, 255};
 static const Color CROWN_GOLD  = {235, 200,  60, 255};
+static const Color CROWN_DARK  = {176, 132,  28, 255};   // crown band
+static const Color CROWN_LIGHT = {255, 236, 150, 255};   // crown jewels
 const Color SEL_RING           = {255, 235, 120, 255};
 static const Color TARGET_DOT  = {255, 235, 120, 180};
 static const Color LASTMOVE    = {255, 235, 120,  70};
@@ -56,17 +58,27 @@ static int scaled(int base_at_72, int sq) {
 // --------------------------------------------------------------------------
 // Pieces (vector art)
 // --------------------------------------------------------------------------
-static void draw_crown(int cx, int cy, int s, int sq, Color col) {
-    // five points joined to a base bar — a compact crown glyph
-    float h = s * 0.5f, w = s * 0.8f;
-    float bot = cy + h * 0.45f, top = cy - h * 0.55f, mid = cy - h * 0.05f;
-    gfx_triangle(cx - w/2, bot, cx - w/2, mid, cx - w/4, top, col);
-    gfx_triangle(cx,       bot, cx - w/4, top, cx + w/4, top, col);
-    gfx_triangle(cx + w/2, mid, cx + w/2, bot, cx + w/4, top, col);
-    gfx_triangle(cx - w/2, bot, cx - w/4, top, cx,       bot, col);
-    gfx_triangle(cx,       bot, cx + w/4, top, cx + w/2, bot, col);
-    int bar = scaled(4, sq);
-    gfx_rect(cx - (int)(w/2), (int)(bot - bar / 2), (int)w, bar, col);
+// A three-point crown on a darker band, jewels on the tips and along the band.
+// Sized from the piece radius `r`. Triangle vertices go apex, base-left,
+// base-right: the counter-clockwise order raylib's DrawTriangle requires.
+static void draw_crown(int cx, int cy, float r, Color gold, Color dark, Color light) {
+    float w = r * 1.00f, h = r * 0.78f;
+    float top = cy - h * 0.52f, bot = cy + h * 0.48f;
+    float band = h * 0.22f, valley = top + h * 0.50f, tip = top + h * 0.14f;
+    float L = cx - w / 2, R = cx + w / 2;
+
+    gfx_rect((int)L, (int)valley, (int)(R - L + 0.5f), (int)(bot - band - valley + 0.5f), gold);
+    gfx_triangle(L,  tip, L,              valley, cx - w * 0.17f, valley, gold);
+    gfx_triangle(cx, top, cx - w * 0.22f, valley, cx + w * 0.22f, valley, gold);
+    gfx_triangle(R,  tip, cx + w * 0.17f, valley, R,              valley, gold);
+    gfx_rect((int)L, (int)(bot - band), (int)(R - L + 0.5f), (int)(band + 0.5f), dark);
+
+    float jr = w * 0.075f;
+    gfx_circle((int)L,  (int)tip, jr, light);
+    gfx_circle(cx,      (int)top, jr, light);
+    gfx_circle((int)R,  (int)tip, jr, light);
+    for (int i = -1; i <= 1; i++)
+        gfx_circle((int)(cx + i * w * 0.28f), (int)(bot - band / 2), jr * 0.8f, light);
 }
 
 static void draw_piece(int cx, int cy, int sq, Square s) {
@@ -80,7 +92,7 @@ static void draw_piece(int cx, int cy, int sq, Square s) {
     gfx_circle(cx, cy, r * 0.86f, base);                           // face
     int ridge = scaled(2, sq);                                     // ridge
     for (int t = 0; t < ridge; t++) gfx_circle_lines(cx, cy, r * 0.6f + t, hi);
-    if (square_is_king(s)) draw_crown(cx, cy, (int)(r * 1.1f), sq, CROWN_GOLD);
+    if (square_is_king(s)) draw_crown(cx, cy, r, CROWN_GOLD, CROWN_DARK, CROWN_LIGHT);
 }
 
 // --------------------------------------------------------------------------

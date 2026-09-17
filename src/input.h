@@ -11,6 +11,8 @@ typedef struct {
     // Menu / overlays
     bool escape_pressed;      // Escape, a two-finger tap, or Android Back
     bool menu_up, menu_down;  // arrow keys / W S, or a vertical swipe
+    bool menu_left, menu_right; // Left / Right / A D, or a horizontal swipe:
+                                // cycles a value on the Options screen
     bool select_pressed;      // Enter or Space
     bool any_pressed;         // any of the above this frame (dismisses game over)
 

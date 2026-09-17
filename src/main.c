@@ -14,13 +14,13 @@
 #include <emscripten/emscripten.h>
 #endif
 
-typedef enum { STATE_MENU, STATE_PLAYING, STATE_GAMEOVER } AppState;
+typedef enum { STATE_MENU, STATE_OPTIONS, STATE_PLAYING, STATE_GAMEOVER } AppState;
 
 typedef enum {
-    ACT_RESUME, ACT_NEW, ACT_DIFF, ACT_SIDE, ACT_SOUND, ACT_RECORD, ACT_EXIT,
+    ACT_RESUME, ACT_NEW, ACT_OPTIONS, ACT_SOUND, ACT_RECORD, ACT_EXIT,
 } MenuAction;
 
-#define MAX_MENU_ITEMS 8
+#define MAX_MENU_ITEMS 6
 #define AI_DELAY       24   // fixed 60 Hz steps the AI "thinks" before replying
 
 static const char* DIFF_LABEL[3] = { "Easy", "Medium", "Hard" };
@@ -34,21 +34,22 @@ static void play_event_sounds(unsigned ev) {
     if (ev & EV_ILLEGAL)      sound_play(SFX_ILLEGAL);
 }
 
-static int build_menu(bool resumable, Difficulty diff, Side human,
-                      const char** labels, MenuAction* actions) {
-    static char diff_label[32], side_label[32];
-    snprintf(diff_label, sizeof diff_label, "Difficulty: %s", DIFF_LABEL[diff]);
-    snprintf(side_label, sizeof side_label, "You play: %s", human == SIDE_RED ? "Red" : "Black");
+// Fill labels[]/actions[] with the current menu. Returns the item count and
+// sets *gap_before to the index that should have a blank line above it -- Exit,
+// which is set apart from the rest -- or -1 when this build has no Exit item at
+// all (mobile and web, where the OS or the browser tab owns the lifecycle).
+static int build_menu(bool resumable,
+                      const char** labels, MenuAction* actions, int* gap_before) {
     int n = 0;
-    if (resumable) { labels[n] = "Resume Game"; actions[n++] = ACT_RESUME; }
-    labels[n] = "New Game";                               actions[n++] = ACT_NEW;
-    labels[n] = diff_label;                               actions[n++] = ACT_DIFF;
-    labels[n] = side_label;                               actions[n++] = ACT_SIDE;
-    labels[n] = sound_is_enabled() ? "Sound: On" : "Sound: Off"; actions[n++] = ACT_SOUND;
+    *gap_before = -1;
+    if (resumable) { labels[n] = "Resume Game";                     actions[n++] = ACT_RESUME; }
+    labels[n] = "New Game";                                         actions[n++] = ACT_NEW;
+    labels[n] = "Options";                                          actions[n++] = ACT_OPTIONS;
+    labels[n] = sound_is_enabled() ? "Sound: On" : "Sound: Off";    actions[n++] = ACT_SOUND;
 #ifndef OC_TOUCH
     // The mp4 recorder is a desktop-only feature (stubbed out on mobile/web), so
-    // the toggle would do nothing there — omit it.
-    labels[n] = recorder_active()  ? "Record: On" : "Record: Off"; actions[n++] = ACT_RECORD;
+    // the toggle would do nothing there -- omit it.
+    labels[n] = recorder_active()  ? "Record: On" : "Record: Off";  actions[n++] = ACT_RECORD;
 #endif
 #if defined(PLATFORM_WEB)
     // A browser tab can't be closed from code, so no Exit on web. (The renderer —
@@ -56,9 +57,42 @@ static int build_menu(bool resumable, Difficulty diff, Side human,
 #elif !defined(PLATFORM_IOS) && !defined(PLATFORM_ANDROID)
     // Mobile apps don't self-terminate (the OS owns the lifecycle: home gesture /
     // back button on Android, Apple guidelines on iOS), so no Exit on either.
-    labels[n] = "Exit";                                   actions[n++] = ACT_EXIT;
+    *gap_before = n;
+    labels[n] = "Exit";                                             actions[n++] = ACT_EXIT;
 #endif
     return n;
+}
+
+// The Options screen: the two choices that shape a game -- the computer's
+// strength and which colour you play -- plus Back. Values cycle with
+// Left/Right, or by selecting the row, which is how a touch player changes
+// them; the last item returns to the menu. Changes apply from the next New
+// Game. Labels are rebuilt every frame from the live settings. Sound and Record
+// stay on the main menu, where a player expects to find them.
+#define OPT_ITEMS 3
+enum { OPT_DIFFICULTY, OPT_SIDE, OPT_BACK };
+
+static int build_options(Difficulty diff, Side human, const char** labels) {
+    static char buf[OPT_ITEMS][32];
+    snprintf(buf[OPT_DIFFICULTY], sizeof buf[0], "Difficulty: %s", DIFF_LABEL[diff]);
+    snprintf(buf[OPT_SIDE],       sizeof buf[0], "You Play: %s", human == SIDE_RED ? "Red" : "Black");
+    snprintf(buf[OPT_BACK],       sizeof buf[0], "Back");
+    for (int i = 0; i < OPT_ITEMS; i++) labels[i] = buf[i];
+    return OPT_ITEMS;
+}
+
+// Cycle one Options value by `dir` (+1 / -1).
+static void cycle_option(Difficulty* diff, Side* human, int item, int dir) {
+    switch (item) {
+    case OPT_DIFFICULTY:
+        *diff = (Difficulty)((*diff + 3 + dir) % 3);
+        break;
+    case OPT_SIDE:          // two values, so either direction toggles it
+        *human = (*human == SIDE_RED) ? SIDE_BLACK : SIDE_RED;
+        break;
+    default:
+        break;
+    }
 }
 
 static bool is_target(const Pt* t, int n, int r, int c) {
@@ -189,11 +223,12 @@ static void frame_step(void* arg) {
     bool resumable = (c->game != NULL && c->game->phase == PHASE_PLAYING);
     const char* labels[MAX_MENU_ITEMS];
     MenuAction actions[MAX_MENU_ITEMS];
-    int menu_count = build_menu(resumable, c->diff, c->human, labels, actions);
-    if (c->selected >= menu_count) c->selected = 0;
+    int gap_before = -1;
+    int menu_count = build_menu(resumable, labels, actions, &gap_before);
 
     switch (c->state) {
     case STATE_MENU: {
+        if (c->selected >= menu_count) c->selected = 0;
         if (in.escape_pressed) {
             // Escape backs out: resume a game in progress, else quit (native).
             if (resumable) { c->state = STATE_PLAYING; break; }
@@ -216,12 +251,45 @@ static void frame_step(void* arg) {
                 start_new_game(c);
                 if (recorder_active()) { recorder_stop(); recorder_start(NULL); }
                 break;
-            case ACT_DIFF: c->diff = (Difficulty)((c->diff + 1) % 3); break;
-            case ACT_SIDE: c->human = (c->human == SIDE_RED) ? SIDE_BLACK : SIDE_RED; break;
+            case ACT_OPTIONS: c->state = STATE_OPTIONS; c->selected = 0; break;
             case ACT_SOUND: sound_toggle(); sound_play(SFX_MENU_SELECT); break;
             case ACT_RECORD: recorder_toggle(); break;
             case ACT_EXIT: c->quit = true; return;
             }
+        }
+        break;
+    }
+
+    case STATE_OPTIONS: {
+        const char* opt_labels[OPT_ITEMS];
+        int opt_count = build_options(c->diff, c->human, opt_labels);
+        if (c->selected >= opt_count) c->selected = 0;
+        if (in.escape_pressed) {
+            c->state = STATE_MENU;
+            c->selected = 0;
+            break;
+        }
+        if (in.menu_up) {
+            c->selected = (c->selected + opt_count - 1) % opt_count;
+            sound_play(SFX_MENU_MOVE);
+        }
+        if (in.menu_down) {
+            c->selected = (c->selected + 1) % opt_count;
+            sound_play(SFX_MENU_MOVE);
+        }
+        int dir = (in.menu_right ? 1 : 0) - (in.menu_left ? 1 : 0);
+        bool do_select = in.select_pressed;
+        if (in.touch_tap) {
+            int hit = render_menu_hit_test((Vector2){in.tap_x, in.tap_y});
+            if (hit >= 0 && hit < opt_count) { c->selected = hit; do_select = true; }
+        }
+        if (do_select && c->selected == OPT_BACK) {
+            c->state = STATE_MENU;
+            c->selected = 0;
+            sound_play(SFX_MENU_SELECT);
+        } else if (dir != 0 || do_select) {
+            cycle_option(&c->diff, &c->human, c->selected, dir ? dir : 1);
+            sound_play(SFX_MENU_SELECT);
         }
         break;
     }
@@ -285,7 +353,11 @@ static void frame_step(void* arg) {
     // Render once per frame, after the update (every frame reaches the end of
     // drawing so input polls correctly).
     if (c->state == STATE_MENU) {
-        render_menu("OPENCHECKERS", labels, menu_count, c->selected, menu_count - 1);
+        render_menu("OPENCHECKERS", labels, menu_count, c->selected, gap_before);
+    } else if (c->state == STATE_OPTIONS) {
+        const char* opt_labels[OPT_ITEMS];
+        int opt_count = build_options(c->diff, c->human, opt_labels);
+        render_menu("OPTIONS", opt_labels, opt_count, c->selected, OPT_BACK);
     } else if (c->state == STATE_GAMEOVER) {
         render_gameover(c->game, c->sel_r, c->sel_c);
     } else {
