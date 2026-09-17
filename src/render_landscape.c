@@ -89,10 +89,19 @@ static void emit(SceneFn fn, void* ctx) {
 
     if (recorder_active() && rec_ready) {
         BeginTextureMode(rec_super);
+        // Blend colour normally but keep the target opaque. With the default
+        // blend, every translucent draw (last-move tint, target dots, the
+        // verdict panel) also lowered the texture's alpha, and the downsample
+        // below then composited those pixels over nothing: the video showed
+        // them faded.
+        rlSetBlendFactorsSeparate(RL_SRC_ALPHA, RL_ONE_MINUS_SRC_ALPHA,
+                                  RL_ONE, RL_ONE_MINUS_SRC_ALPHA, RL_FUNC_ADD, RL_FUNC_ADD);
+        BeginBlendMode(BLEND_CUSTOM_SEPARATE);
         rlPushMatrix();
         rlScalef((float)SS, (float)SS, 1.0f);
         fn(ctx, MIN_W, MIN_H);
         rlPopMatrix();
+        EndBlendMode();
         EndTextureMode();
 
         BeginTextureMode(rec_canvas);
