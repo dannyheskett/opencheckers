@@ -10,7 +10,8 @@ record, and the App Privacy label.
                 bound to the team's existing Apple Distribution certificate,
                 and write the .mobileprovision to --out
     app-info    once the app record exists: category, content rights, age
-                rating (all "None" -> 4+), privacy policy URL, a free price, and
+                rating (all "None" -> 4+), privacy policy, support and marketing
+                URLs, a free price, and
                 availability in every territory except mainland China
 
 The distribution certificate is team-wide and shared by every app, so this never
@@ -37,6 +38,8 @@ from asc_release import ASC, BUNDLE_ID, is_placeholder
 APP_NAME = "opencheckers"
 PROFILE_NAME = "Opencheckers App Store"
 PRIVACY_URL = "https://danheskett.com/app/privacy-policy/"
+SUPPORT_URL = "https://danheskett.com"
+MARKETING_URL = "https://danheskett.com/projects/opencheckers/"
 
 # ios/app-store-assets/LISTING.md: Games -> Board, with Strategy as the second
 # games subcategory.
@@ -157,6 +160,17 @@ def app_info(asc):
             "type": "appInfoLocalizations", "id": loc["id"],
             "attributes": {"privacyPolicyUrl": PRIVACY_URL}}})
         print(f"privacy policy URL ({loc['attributes']['locale']}): {PRIVACY_URL}")
+
+    # Support URL is required before review; it lives on the version's
+    # localization, not on appInfo.
+    for v in asc.call("GET", f"/v1/apps/{app}/appStoreVersions?limit=10").get("data", []):
+        if v["attributes"]["appStoreState"] != "PREPARE_FOR_SUBMISSION":
+            continue
+        for loc in asc.call("GET", f"/v1/appStoreVersions/{v['id']}/appStoreVersionLocalizations").get("data", []):
+            asc.call("PATCH", f"/v1/appStoreVersionLocalizations/{loc['id']}", {"data": {
+                "type": "appStoreVersionLocalizations", "id": loc["id"],
+                "attributes": {"supportUrl": SUPPORT_URL, "marketingUrl": MARKETING_URL}}})
+            print(f"support / marketing URL ({loc['attributes']['locale']}): {SUPPORT_URL}, {MARKETING_URL}")
 
     decl = asc.call("GET", f"/v1/appInfos/{iid}/ageRatingDeclaration").get("data")
     if decl:

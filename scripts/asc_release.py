@@ -359,7 +359,16 @@ def cmd_release(asc, args):
     # "What's New" is REQUIRED on an update, and a submission without it fails
     # Apple's validation. An unattended release has no human to type it, so it
     # comes from the release notes the caller passes.
-    if args.whats_new:
+    #
+    # The app's FIRST version is the exception: there is nothing to be new
+    # relative to, and Apple refuses the field outright (409 "Attribute
+    # 'whatsNew' cannot be edited at this time"). A first version is one with no
+    # other version record beside it.
+    others = [v for v in asc.call("GET", f"/v1/apps/{app}/appStoreVersions?limit=10").get("data", [])
+              if v["id"] != version_id]
+    if args.whats_new and not others and not is_placeholder(version_id):
+        print("  whats-new: skipped (first version of the app)")
+    elif args.whats_new:
         # A dry run never created the version, so version_id is a placeholder and
         # there is nothing real to look the localization up on. GETs are not
         # suppressed by --dry-run (they are how current state is read), so this
@@ -391,11 +400,21 @@ def cmd_release(asc, args):
         print("  not submitting (pass --submit to send it to review)")
         return 0
 
-    submission = asc.call("POST", "/v1/reviewSubmissions", {
-        "data": {"type": "reviewSubmissions",
-                 "attributes": {"platform": "IOS"},
-                 "relationships": {"app": {"data": {"type": "apps", "id": app}}}}})
-    sub_id = (submission.get("data") or {}).get("id", "<submission>")
+    # Reuse an unsent draft if one exists. Creating the submission is the step
+    # that succeeds even when the version is not reviewable, so every failed
+    # attempt used to leave an empty READY_FOR_REVIEW draft behind -- and Apple
+    # refuses to cancel an empty one, so they pile up in the console.
+    drafts = asc.call("GET", f"/v1/reviewSubmissions?filter[app]={app}"
+                             "&filter[platform]=IOS&filter[state]=READY_FOR_REVIEW")
+    if drafts.get("data"):
+        sub_id = drafts["data"][0]["id"]
+        print(f"  reusing draft submission {sub_id}")
+    else:
+        submission = asc.call("POST", "/v1/reviewSubmissions", {
+            "data": {"type": "reviewSubmissions",
+                     "attributes": {"platform": "IOS"},
+                     "relationships": {"app": {"data": {"type": "apps", "id": app}}}}})
+        sub_id = (submission.get("data") or {}).get("id", "<submission>")
     asc.call("POST", "/v1/reviewSubmissionItems", {
         "data": {"type": "reviewSubmissionItems",
                  "relationships": {
