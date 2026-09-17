@@ -3,7 +3,7 @@
 
 The icons are the game itself in miniature: a crowned red king in front of a
 black man, drawn the way render.c draws pieces (shadow, rim, face, ridge ring,
-gold crown), on the felt green of the table. Keeping them generated rather than
+jewelled gold crown), on the felt green of the table. Keeping them generated rather than
 hand-drawn means the palette can never drift from src/render.c, and every size
 is produced from the same geometry.
 
@@ -31,6 +31,8 @@ BLK_PIECE = (48, 48, 56, 255)
 BLK_HI = (110, 112, 124, 255)
 BLK_LO = (20, 20, 26, 255)
 CROWN_GOLD = (235, 200, 60, 255)
+CROWN_DARK = (176, 132, 28, 255)
+CROWN_LIGHT = (255, 236, 150, 255)
 
 SS = 4  # supersample factor; every shape is drawn large and downscaled
 
@@ -39,15 +41,22 @@ def circle(d, cx, cy, r, **kw):
     d.ellipse([cx - r, cy - r, cx + r, cy + r], **kw)
 
 
-def crown(d, cx, cy, s, col):
-    """The five-point crown glyph from draw_crown() in src/render.c."""
-    h, w = s * 0.5, s * 0.8
-    bot, top, mid = cy + h * 0.45, cy - h * 0.55, cy - h * 0.05
-    d.polygon([(cx - w / 2, bot), (cx - w / 2, mid), (cx - w / 4, top), (cx, bot)], fill=col)
-    d.polygon([(cx, bot), (cx - w / 4, top), (cx + w / 4, top)], fill=col)
-    d.polygon([(cx, bot), (cx + w / 4, top), (cx + w / 2, mid), (cx + w / 2, bot)], fill=col)
-    bar = max(1, s * 0.07)
-    d.rectangle([cx - w / 2, bot - bar / 2, cx + w / 2, bot + bar / 2], fill=col)
+def crown(d, cx, cy, r):
+    """The crown from draw_crown() in src/render.c, sized from the piece radius."""
+    w, h = r * 1.00, r * 0.78
+    top, bot = cy - h * 0.52, cy + h * 0.48
+    band, valley, tip = h * 0.22, top + h * 0.50, top + h * 0.14
+    left, right = cx - w / 2, cx + w / 2
+    d.rectangle([left, valley, right, bot - band], fill=CROWN_GOLD)
+    d.polygon([(left, tip), (left, valley), (cx - w * 0.17, valley)], fill=CROWN_GOLD)
+    d.polygon([(cx, top), (cx - w * 0.22, valley), (cx + w * 0.22, valley)], fill=CROWN_GOLD)
+    d.polygon([(right, tip), (cx + w * 0.17, valley), (right, valley)], fill=CROWN_GOLD)
+    d.rectangle([left, bot - band, right, bot], fill=CROWN_DARK)
+    jr = w * 0.075
+    for x, y in ((left, tip), (cx, top), (right, tip)):
+        circle(d, x, y, jr, fill=CROWN_LIGHT)
+    for i in (-1, 0, 1):
+        circle(d, cx + i * w * 0.28, bot - band / 2, jr * 0.8, fill=CROWN_LIGHT)
 
 
 def piece(d, cx, cy, r, red, king):
@@ -58,7 +67,7 @@ def piece(d, cx, cy, r, red, king):
     circle(d, cx, cy, r * 0.86, fill=base)                     # face
     circle(d, cx, cy, r * 0.6, outline=hi, width=max(1, int(r * 0.05)))  # ridge
     if king:
-        crown(d, cx, cy, r * 1.1, CROWN_GOLD)
+        crown(d, cx, cy, r)
 
 
 def compose(size, background, content_scale):
