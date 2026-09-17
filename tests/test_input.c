@@ -208,9 +208,17 @@ static void test_swipes_drive_menus(void) {
     in = frame();
     CHECK(!in.touch_tap && !in.menu_up && !in.menu_down);
 
+    fake_gesture = GESTURE_SWIPE_LEFT;
+    in = frame();
+    CHECK(in.menu_left && !in.menu_right && !in.menu_up && !in.menu_down);
+
+    fake_gesture = GESTURE_SWIPE_RIGHT;
+    in = frame();
+    CHECK(in.menu_right && !in.menu_left && !in.menu_up && !in.menu_down);
+
     fake_gesture = 0;
     in = frame();
-    CHECK(!in.menu_up && !in.menu_down);
+    CHECK(!in.menu_up && !in.menu_down && !in.menu_left && !in.menu_right);
 }
 
 // --- Landscape (desktop-browser) mode: the touch layer is inert ---------------

@@ -56,15 +56,18 @@ American / English draughts on an 8×8 board, 12 pieces each:
   selected until the chain ends.
 - **Escape**: menu (your game is kept and can be resumed); on the menu, exit
 - **Alt+Enter**: toggle fullscreen
-- **Up / Down** (or W / S) + **Enter / Space**: menu navigation
+- **Up / Down** (or W / S) + **Enter / Space**: menu navigation;
+  **Left / Right** (or A / D) cycle a value on the Options screen
 
 **Touch** (Android, iOS, and mobile browsers):
 
 - **Tap** a piece to select it, then **tap** a dotted square to move
 - **Two-finger tap**: menu (the game stays resumable); Android **Back** does the same
-- **Tap** a menu item to choose it; **swipe up / down** also moves the highlight
+- **Tap a menu row** to choose it — on the Options screen, tapping a row cycles
+  its value; **swipe up / down** moves the selection, **left / right** cycles
 
-Choose **Easy / Medium / Hard** and which colour you play from the menu.
+**Options** (from the menu): **Difficulty** (Easy / Medium / Hard) and **You Play**
+(Red / Black). Changes apply from the next New Game.
 
 ## Building
 

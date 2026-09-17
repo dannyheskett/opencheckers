@@ -31,6 +31,8 @@ static void poll_keyboard(Input* in) {
 
     in->menu_up   = IsKeyPressed(KEY_UP)   || IsKeyPressed(KEY_W);
     in->menu_down = IsKeyPressed(KEY_DOWN) || IsKeyPressed(KEY_S);
+    in->menu_left  = IsKeyPressed(KEY_LEFT)  || IsKeyPressed(KEY_A);
+    in->menu_right = IsKeyPressed(KEY_RIGHT) || IsKeyPressed(KEY_D);
     in->select_pressed = (IsKeyPressed(KEY_ENTER) && !in->fullscreen_toggle)
                        || IsKeyPressed(KEY_SPACE);
 
@@ -61,7 +63,7 @@ static TouchState s_touch;
 #define TWO_FINGER_MAX_S 0.5
 
 // Touch source: one-finger taps (board and menu), two-finger tap = menu, and
-// swipe menus. Only ever sets fields true, so it composes over the keyboard
+// swipe menus (vertical to move, horizontal to cycle an Options value). Only ever sets fields true, so it composes over the keyboard
 // source on web without clobbering it. Native-resolution rendering means touch
 // coords map 1:1 to the on-screen geometry (board squares, menu rows).
 static void poll_touch(Input* in) {
@@ -125,10 +127,13 @@ static void poll_touch(Input* in) {
         s_touch.active = false;
     }
 
-    // Swipe gestures drive menu navigation (taps are decided on release, above).
+    // Swipe gestures drive menu navigation (taps are decided on release, above):
+    // up / down move the highlight, left / right cycle an Options value.
     int g = GetGestureDetected();
-    if (g == GESTURE_SWIPE_UP)   in->menu_up   = true;
-    if (g == GESTURE_SWIPE_DOWN) in->menu_down = true;
+    if (g == GESTURE_SWIPE_UP)    in->menu_up    = true;
+    if (g == GESTURE_SWIPE_DOWN)  in->menu_down  = true;
+    if (g == GESTURE_SWIPE_LEFT)  in->menu_left  = true;
+    if (g == GESTURE_SWIPE_RIGHT) in->menu_right = true;
 
 #if !defined(PLATFORM_IOS)
     // Android hardware/gesture Back button (KEY_BACK); harmless no-op on web.
