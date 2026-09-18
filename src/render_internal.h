@@ -10,6 +10,7 @@
 
 #include "render.h"
 #include "gfx.h"
+#include "menu.h"
 
 // Palette (defined in render.c), shared by both renderers.
 extern const Color FELT;        // background felt
@@ -36,18 +37,12 @@ bool board_view_hit(BoardView v, int mx, int my, int* r, int* c);
 // "Your move" / "Thinking..." / "You win" / "You lose" for the status bar.
 const char* status_state_text(const Game* g);
 
-// Computed menu geometry + the shared menu drawer. Each renderer fills the
-// layout from its own sizing.
-typedef struct {
-    int cx, px, py, panel_w, panel_h, radius;
-    int title_size, title_y, items_y, line_h, item_fs;
-} MenuLayout;
-void draw_menu_panel(MenuLayout m, const char* title, const char* const* items,
-                     int count, int selected, int gap_before, bool capture);
+// The family menu (menu.c) in this game's colours.
+MenuTheme menu_theme(void);
 
-// The game-over panel: a translucent box with a large verdict and a hint line.
-void draw_verdict_panel(const Game* g, int cx, int cy, int panel_w, int panel_h,
-                        int title_fs, int sub_fs, const char* sub);
+// The game-over notice (menu_draw_notice) over the board: the verdict and a
+// hint line.
+void draw_verdict_panel(const Game* g, int view_w, int view_h, const char* sub);
 
 // Per-renderer entry points (defined in render_portrait/landscape.c), called by
 // the OC_DISPATCH macro in render.c.
@@ -55,18 +50,12 @@ void draw_verdict_panel(const Game* g, int cx, int cy, int panel_w, int panel_h,
 void render_frame_portrait(const Game* g, int sel_r, int sel_c,
                            const Pt* targets, int n_targets);
 void render_gameover_portrait(const Game* g, int sel_r, int sel_c);
-void render_menu_portrait(const char* title, const char* const* labels, int count,
-                          int selected, int gap_before);
 bool render_board_at_portrait(int mx, int my, int* r, int* c);
 #endif
 #ifdef OC_LANDSCAPE
-void render_landscape_init(void);
-void render_landscape_cleanup(void);
 void render_frame_landscape(const Game* g, int sel_r, int sel_c,
                             const Pt* targets, int n_targets);
 void render_gameover_landscape(const Game* g, int sel_r, int sel_c);
-void render_menu_landscape(const char* title, const char* const* labels, int count,
-                           int selected, int gap_before);
 bool render_board_at_landscape(int mx, int my, int* r, int* c);
 #endif
 

@@ -1,8 +1,10 @@
-// Common renderer TU: palette and shared draw helpers (board, pieces, menu,
-// verdict panel), window lifecycle, and the public entry points that dispatch to
+// Common renderer TU: palette and shared draw helpers (board, pieces, menu
+// theme, verdict panel), lifecycle, and the public entry points that dispatch to
 // the active renderer. The two renderers live in render_portrait.c and
 // render_landscape.c.
 #include "render_internal.h"
+#include "present.h"
+#include "window.h"
 #if !defined(PLATFORM_IOS)
 #include <raylib.h>  // window/timing (InitWindow, …); absent on iOS
 #endif
@@ -68,9 +70,9 @@ static void draw_crown(int cx, int cy, float r, Color gold, Color dark, Color li
     float L = cx - w / 2, R = cx + w / 2;
 
     gfx_rect((int)L, (int)valley, (int)(R - L + 0.5f), (int)(bot - band - valley + 0.5f), gold);
-    gfx_triangle(L,  tip, L,              valley, cx - w * 0.17f, valley, gold);
-    gfx_triangle(cx, top, cx - w * 0.22f, valley, cx + w * 0.22f, valley, gold);
-    gfx_triangle(R,  tip, cx + w * 0.17f, valley, R,              valley, gold);
+    gfx_triangle((Vector2){L, tip},  (Vector2){L, valley},              (Vector2){cx - w * 0.17f, valley}, gold);
+    gfx_triangle((Vector2){cx, top}, (Vector2){cx - w * 0.22f, valley}, (Vector2){cx + w * 0.22f, valley}, gold);
+    gfx_triangle((Vector2){R, tip},  (Vector2){cx + w * 0.17f, valley}, (Vector2){R, valley},              gold);
     gfx_rect((int)L, (int)(bot - band), (int)(R - L + 0.5f), (int)(band + 0.5f), dark);
 
     float jr = w * 0.075f;
@@ -155,118 +157,32 @@ const char* status_state_text(const Game* g) {
 }
 
 // --------------------------------------------------------------------------
-// Menu + verdict panels
+// Menu + verdict panel (menu.c, the same in every game in this family)
 // --------------------------------------------------------------------------
-// Menu item rectangles captured by the last render_menu() (for touch hit-testing
-// on portrait); written by draw_menu_panel, read by render_menu_hit_test.
-static Rectangle s_menu_item_rects[8];
-static int s_menu_item_count = 0;
-
-// Draw the menu panel, centred title, and item list with selection markers.
-// `capture` records each row's rectangle for touch hit-testing (portrait);
-// landscape passes false (mouse and keyboard).
-void draw_menu_panel(MenuLayout m, const char* title, const char* const* items,
-                     int count, int selected, int gap_before, bool capture) {
-    gfx_rect_rounded(m.px, m.py, m.panel_w, m.panel_h, m.radius, MENU_BG);
-    gfx_rect_rounded_lines(m.px, m.py, m.panel_w, m.panel_h, m.radius, TEXT_DIM);
-    gfx_text(title, m.cx - gfx_measure_text(title, m.title_size) / 2, m.title_y,
-             m.title_size, TEXT_LIGHT);
-
-    s_menu_item_count = capture ? ((count < 8) ? count : 8) : 0;
-    int y = m.items_y;
-    for (int i = 0; i < count; i++) {
-        if (gap_before == i) y += m.line_h;
-        const char* label = items[i];
-        int lw = gfx_measure_text(label, m.item_fs);
-        Color col = (i == selected) ? SEL_RING : TEXT_DIM;
-        if (i == selected) {
-            gfx_text(">", m.cx - lw / 2 - m.item_fs * 14 / 11, y, m.item_fs, SEL_RING);
-            gfx_text("<", m.cx + lw / 2 + m.item_fs * 7 / 11, y, m.item_fs, SEL_RING);
-        }
-        gfx_text(label, m.cx - lw / 2, y, m.item_fs, col);
-        if (capture && i < 8) {
-            s_menu_item_rects[i] = (Rectangle){ (float)m.px, (float)(y - (m.line_h - m.item_fs) / 2),
-                                                (float)m.panel_w, (float)m.line_h };
-        }
-        y += m.line_h;
-    }
+MenuTheme menu_theme(void) {
+    MenuTheme t = { .background = FELT, .panel = MENU_BG, .edge = TEXT_DIM,
+                    .title = TEXT_LIGHT, .item = TEXT_DIM, .selected = SEL_RING };
+    return t;
 }
 
-void draw_verdict_panel(const Game* g, int cx, int cy, int panel_w, int panel_h,
-                        int title_fs, int sub_fs, const char* sub) {
-    int px = cx - panel_w / 2, py = cy - panel_h / 2;
-    gfx_rect(px, py, panel_w, panel_h, (Color){0, 0, 0, 170});
-    gfx_rect_lines(px, py, panel_w, panel_h, TEXT_LIGHT);
+void draw_verdict_panel(const Game* g, int view_w, int view_h, const char* sub) {
+    MenuTheme t = menu_theme();
     const char* line = (g->phase == PHASE_HUMAN_WON) ? "YOU WIN" : "YOU LOSE";
-    gfx_text(line, cx - gfx_measure_text(line, title_fs) / 2,
-             py + panel_h * 34 / 150, title_fs, SEL_RING);
-    gfx_text(sub, cx - gfx_measure_text(sub, sub_fs) / 2,
-             py + panel_h * 96 / 150, sub_fs, TEXT_DIM);
+    menu_draw_notice(&t, view_w, view_h, line, sub);
 }
 
 // --------------------------------------------------------------------------
 // Lifecycle
 // --------------------------------------------------------------------------
 void render_init(void) {
-#if defined(PLATFORM_IOS)
-    // iOS: UIKit owns the window/surface and drives the loop (CADisplayLink); the
-    // Metal layer is attached separately by the app shell. Nothing to do here.
-#else
-#if defined(PLATFORM_ANDROID)
-    // Request immersive fullscreen so the app draws under the status bar / camera
-    // cutout (paired with windowLayoutInDisplayCutoutMode=shortEdges in the theme)
-    // — otherwise the surface is letterboxed below the status bar.
-    SetConfigFlags(FLAG_FULLSCREEN_MODE | FLAG_MSAA_4X_HINT);
-    // Request 0x0: raylib's Android backend then renders at the device's native
-    // resolution. Any fixed size here gets aspect-letterboxed into the display
-    // (with GetScreenWidth/Height reporting the request, not the device).
-    InitWindow(0, 0, "opencheckers");
-#elif defined(PLATFORM_WEB)
-    // Let the GL canvas follow the browser viewport (the HTML shell sizes it);
-    // GetScreenWidth/Height then track it so the layout re-fits on resize/rotate.
-    SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT);
-    InitWindow(MIN_W, MIN_H, "opencheckers");
-#else
-    // Desktop native: a freely resizable window with a fixed-size board; the
-    // minimum window is just big enough to play. MSAA keeps the round pieces clean.
-    SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT);
-    InitWindow(MIN_W, MIN_H, "opencheckers");
-    SetWindowMinSize(MIN_W, MIN_H);
-#endif
-    SetExitKey(KEY_NULL); // Escape is handled by the game, not the window
-    SetTargetFPS(60);
-    gfx_font_init();      // load the bundled UI font now that the GL context exists
-#ifdef OC_LANDSCAPE
-    render_landscape_init();
-#endif
-#endif // PLATFORM_IOS
+    window_init(GAME_NAME);
+    present_init();
 }
 
 void render_cleanup(void) {
-#ifdef OC_LANDSCAPE
-    render_landscape_cleanup();
-#endif
-#if !defined(PLATFORM_IOS)
-    CloseWindow();
-#endif
+    present_cleanup();
+    window_close();
 }
-
-void render_toggle_fullscreen(void) {
-#if defined(PLATFORM_ANDROID) || defined(PLATFORM_IOS)
-    // Android / iOS apps are always fullscreen; nothing to toggle.
-    (void)0;
-}
-#else
-    if (IsWindowFullscreen()) {
-        ToggleFullscreen();
-        SetWindowSize(MIN_W, MIN_H);
-    } else {
-        int m = GetCurrentMonitor();
-        SetWindowSize(GetMonitorWidth(m), GetMonitorHeight(m));
-        ToggleFullscreen();
-    }
-}
-#endif // PLATFORM_ANDROID / PLATFORM_IOS
 
 // --- Public entry points ---------------------------------------------------
 // Dispatch to the active renderer: compile-time on native builds that have only
@@ -287,23 +203,9 @@ void render_gameover(const Game* g, int sel_r, int sel_c) {
 }
 void render_menu(const char* title, const char* const* labels, int count,
                  int selected, int gap_before) {
-    OC_DISPATCH(render_menu, title, labels, count, selected, gap_before);
+    MenuTheme t = menu_theme();
+    menu_show(&t, title, labels, count, selected, gap_before);
 }
 bool render_board_at(int mx, int my, int* r, int* c) {
     return OC_DISPATCH(render_board_at, mx, my, r, c);
-}
-
-int render_menu_hit_test(Vector2 p) {
-    for (int i = 0; i < s_menu_item_count; i++) {
-        if (CheckCollisionPointRec(p, s_menu_item_rects[i])) return i;
-    }
-    return -1;
-}
-
-bool render_window_should_close(void) {
-    return WindowShouldClose();
-}
-
-bool render_window_focused(void) {
-    return IsWindowFocused();
 }
