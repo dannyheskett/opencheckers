@@ -1,17 +1,15 @@
-#ifndef OPENCHECKERS_GFX_H
-#define OPENCHECKERS_GFX_H
+#ifndef GFX_H
+#define GFX_H
 
 #include "oc_types.h"
 
-// Immediate-mode 2D drawing primitives — the entire drawing surface the shared
-// game renderer needs. Two backends implement this identically-behaving API:
-//   gfx_raylib.c — wraps raylib (desktop / web / android). Behaviour-identical
-//                  to the direct raylib calls it replaces.
-//   gfx_metal.mm — native Metal (iOS), no raylib.
-// The portrait/shared code in render.c calls these instead of raylib directly,
-// so the layout logic is shared and only the primitives are swapped per platform.
-// Render textures (the recorder's supersampled capture) stay raylib-only in the
-// landscape renderer, which never compiles on iOS.
+// Immediate-mode 2D drawing primitives: the entire drawing surface the games
+// in this family use. This file is identical in every game. Two backends
+// implement it with identical behaviour:
+//   gfx_raylib.c     -- wraps raylib (desktop / web / Android).
+//   ios/gfx_metal.mm -- native Metal (iOS), no raylib.
+// The renderers call these instead of raylib directly, so all drawing code is
+// shared and only the primitives are swapped per platform.
 
 #ifdef __cplusplus
 extern "C" {
@@ -28,16 +26,21 @@ void gfx_clear(Color color);
 void gfx_rect(int x, int y, int w, int h, Color color);
 void gfx_rect_lines(int x, int y, int w, int h, Color color);
 void gfx_line(int x1, int y1, int x2, int y2, Color color);
+// Vertical gradient from `top` to `bottom`.
+void gfx_rect_gradient_v(int x, int y, int w, int h, Color top, Color bottom);
 
-// Checker pieces and the crown glyph. Vertices of gfx_triangle go
-// counter-clockwise, as raylib's DrawTriangle requires.
-void gfx_circle(int cx, int cy, float radius, Color color);
-void gfx_circle_lines(int cx, int cy, float radius, Color color);
-void gfx_triangle(float x1, float y1, float x2, float y2, float x3, float y3, Color color);
+// Rounded rectangle, filled and stroked. `roundness` is raylib's: the corner
+// radius as a fraction (0..1) of the shorter side, so a card keeps the same
+// visual corner at any scale.
+void gfx_rect_rounded(int x, int y, int w, int h, float roundness, Color color);
+void gfx_rect_rounded_lines(int x, int y, int w, int h, float roundness, Color color);
 
-// Rounded menu panel. `radius` is the corner radius in pixels.
-void gfx_rect_rounded(int x, int y, int w, int h, int radius, Color color);
-void gfx_rect_rounded_lines(int x, int y, int w, int h, int radius, Color color);
+void gfx_circle(float cx, float cy, float radius, Color color);
+void gfx_circle_lines(float cx, float cy, float radius, Color color);
+
+// A filled triangle. Winding-independent: the backend draws it whichever way the
+// vertices are ordered, so the pip fans do not have to care about orientation.
+void gfx_triangle(Vector2 a, Vector2 b, Vector2 c, Color color);
 
 void gfx_text(const char* text, int x, int y, int font_size, Color color);
 int  gfx_measure_text(const char* text, int font_size);
@@ -46,4 +49,4 @@ int  gfx_measure_text(const char* text, int font_size);
 }
 #endif
 
-#endif // OPENCHECKERS_GFX_H
+#endif // GFX_H

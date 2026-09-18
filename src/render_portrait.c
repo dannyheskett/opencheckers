@@ -17,8 +17,7 @@ static int title_bar_h(int h) { int fs = title_fs(h); return fs + fs / 2; }
 // cutout (front camera) when the surface draws under it, so neither the
 // wordmark nor the status band below ever sits beneath the camera.
 static int top_bar_h(int h) {
-    int top, cl, cr;
-    safe_area_get(&top, &cl, &cr);
+    int top = safe_area_get().top;
     int tb = title_bar_h(h);
     return (top > tb) ? top : tb;
 }
@@ -101,8 +100,8 @@ static void draw_title_bar(void) {
     gfx_rect(0, 0, w, tb_h, FELT_DARK);
     gfx_line(0, tb_h, w, tb_h, BOARD_EDGE);
 
-    int top, cl, cr;
-    safe_area_get(&top, &cl, &cr);
+    SafeArea sa = safe_area_get();
+    int top = sa.top, cl = sa.cutout_left, cr = sa.cutout_right;
     int full = gfx_measure_text("OPENCHECKERS", fs);
 
     // No horizontal extent reported. With no top inset either, there is no
@@ -188,40 +187,9 @@ void render_frame_portrait(const Game* g, int sel_r, int sel_c,
 }
 
 void render_gameover_portrait(const Game* g, int sel_r, int sel_c) {
-    int w = GetScreenWidth(), h = GetScreenHeight();
-    int base = (w < h) ? w : h;   // keep the dialog compact even in a wide window
-    int pw = base * 82 / 100;
-    int ph = base * 30 / 100;
     gfx_begin_frame();
     draw_game_portrait(g, sel_r, sel_c, NULL, 0);
-    draw_verdict_panel(g, w / 2, h / 2, pw, ph, ph * 29 / 100, ph * 12 / 100,
-                       "Tap to continue");
-    gfx_end_frame();
-}
-
-void render_menu_portrait(const char* title, const char* const* labels, int count,
-                          int selected, int gap_before) {
-    int w = GetScreenWidth(), h = GetScreenHeight();
-    int line_h = h / 20, item_fs = h / 28;
-    int extra = (gap_before >= 0) ? 1 : 0;
-    int base = (w < h) ? w : h;              // keep the panel compact in a wide window
-    int panel_w = base * 82 / 100;
-
-    // Shrink the title if it would overrun the panel (narrow phones).
-    int title_size = h / 16;
-    while (title_size > 12 && gfx_measure_text(title, title_size) > panel_w - line_h) title_size -= 2;
-
-    int panel_h = title_size + line_h + (count + extra) * line_h + line_h * 2;
-    int px = w / 2 - panel_w / 2, py = (h - panel_h) / 2;
-    MenuLayout m = { .cx = w / 2, .px = px, .py = py, .panel_w = panel_w, .panel_h = panel_h,
-                     .radius = base / 40,
-                     .title_size = title_size, .title_y = py + line_h,
-                     .items_y = py + line_h + title_size + line_h,
-                     .line_h = line_h, .item_fs = item_fs };
-
-    gfx_begin_frame();
-    gfx_clear(FELT);
-    draw_menu_panel(m, title, labels, count, selected, gap_before, true);
+    draw_verdict_panel(g, GetScreenWidth(), GetScreenHeight(), "Tap to continue");
     gfx_end_frame();
 }
 

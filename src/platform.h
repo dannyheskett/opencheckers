@@ -1,6 +1,14 @@
 #ifndef OPENCHECKERS_PLATFORM_H
 #define OPENCHECKERS_PLATFORM_H
 
+// The game's name: window title and recording file prefix.
+#define GAME_NAME "opencheckers"
+
+// Recording size (recorder.c): the landscape board with its bars and margins.
+// Both are multiples of 16 for the H.264 encoder.
+#define REC_W 624
+#define REC_H 704
+
 // OC_TOUCH selects the touch-first mobile frontend: the adaptive portrait
 // layout and tap-driven board and menus. It is enabled on Android, iOS, and the
 // WebAssembly build (which targets mobile browsers but also accepts mouse and
@@ -17,7 +25,7 @@
 //   OC_PORTRAIT  — the touch-first portrait renderer (board sized to the screen
 //                  width). Available on Android, iOS, and web.
 //   OC_LANDSCAPE — the desktop renderer (fixed-size board centred in a freely
-//                  resizable window). Available on desktop native and web.
+//                  resizable window, shrunk to fit a smaller one). Available on desktop native and web.
 // Native desktop compiles only landscape; Android and iOS only portrait; the web build
 // compiles BOTH and chooses at runtime (desktop browser -> landscape, phone ->
 // portrait), so a laptop browser gets the same look as the native desktop app.

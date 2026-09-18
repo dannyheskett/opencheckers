@@ -24,9 +24,10 @@ platform-independent and shared unchanged.
 There are two renderers. Native desktop compiles only landscape; Android and iOS
 compile only portrait; the web build compiles both and selects one at runtime.
 
-- **Landscape** — the window is freely **resizable**, but the **board is a fixed
-  size** with a minimum window just big enough to play (the openklondike model).
-  A title bar sits above the board and a status bar below it.
+- **Landscape** — the window is freely **resizable**, and the **board is a
+  fixed size** centred in it, shrinking only in a window too small to hold it
+  (the openklondike model). A title bar sits above the board and a status bar
+  below it.
 - **Portrait** — adaptive to the live screen size. A thin OPENCHECKERS title bar
   is pinned to the top, a status band (whose move, difficulty, piece counts)
   sits below it, and the board fills the width at the largest square that fits,
@@ -56,8 +57,9 @@ American / English draughts on an 8×8 board, 12 pieces each:
   selected until the chain ends.
 - **Escape**: menu (your game is kept and can be resumed); on the menu, exit
 - **Alt+Enter**: toggle fullscreen
-- **Up / Down** (or W / S) + **Enter / Space**: menu navigation;
-  **Left / Right** (or A / D) cycle a value on the Options screen
+- **Click a menu row** to choose it, or **Up / Down** (or W / S) +
+  **Enter / Space**; **Left / Right** (or A / D) cycle a value on the Options
+  screen
 
 **Touch** (Android, iOS, and mobile browsers):
 
@@ -68,6 +70,29 @@ American / English draughts on an 8×8 board, 12 pieces each:
 
 **Options** (from the menu): **Difficulty** (Easy / Medium / Hard) and **You Play**
 (Red / Black). Changes apply from the next New Game.
+
+## Menu and window
+
+These behave identically in every game in this family (openblocks, openrackem,
+openklondike, opencheckers, openpairs, opensweeper). The code for them
+(`src/menu.c`, `src/window.c`, `src/present.c`, and the gfx, safe-area,
+timing, audio and recorder layers) is the same file in every repo.
+
+- **Menu**: Resume Game (when a game is in progress), New Game, Options (when
+  the game has settings), Sound, Record (desktop only), Exit (desktop only, set
+  apart by a blank line). Options holds the settings and Back.
+- **Menu input**: Up / Down (or W / S) move, Enter / Space choose, Left / Right
+  (or A / D) cycle an Options value, Escape backs out. A mouse click or a tap on
+  a row chooses it. Swipes move the selection and cycle values.
+- **Menu size**: derived from the long edge of the view, so it is the same size
+  upright and sideways and grows with the window; it shrinks only when its rows
+  would not otherwise fit.
+- **Back to the menu**: Escape, Android Back, or a two-finger tap. Losing focus
+  (app backgrounded, tab hidden, window deactivated) also returns to the menu;
+  the game stays resumable.
+- **Window**: desktop opens at 960×720, resizes freely down to 640×480, and
+  Alt+Enter toggles borderless fullscreen and back to the previous window.
+  Web fills the browser viewport. Android and iOS are fullscreen.
 
 ## Building
 
