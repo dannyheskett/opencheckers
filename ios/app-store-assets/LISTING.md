@@ -73,6 +73,15 @@ FREE AND OPEN SOURCE
 opencheckers is open source. Read the code, report a bug, or build it yourself: https://github.com/dannyheskett/opencheckers
 ```
 
+## App Review notes
+
+Sent to Apple's reviewer with every submission that has none yet
+(`scripts/asc_release.py` sets them, with the team's review contact).
+
+```
+Thank you very much for reviewing my game. opencheckers is single-player checkers against the computer. It needs no account, sign-in or network access; tap a piece, then tap a highlighted square to move. A two-finger tap opens the menu, where Options sets the difficulty and your colour.
+```
+
 ## App information
 
 - **Category (primary):** Games -> Board
