@@ -102,43 +102,6 @@ static bool is_target(const Pt* t, int n, int r, int c) {
     return false;
 }
 
-#ifdef OC_SIMSTATS
-// Real-device validation instrumentation (SIMSTATS=1 builds; compiles on
-// desktop too for local smoke tests). Once per second of continuous play, log
-// how many frames were rendered vs how many fixed 60 Hz sim steps ran, so
-// scripts/devicefarm_run.py can assert from the device log that the
-// fixed-timestep accumulator holds ~60 steps/s at whatever refresh rate the
-// display actually delivers (the frames count is the evidence of that rate).
-// Any gap between calls (menu, a stall past the spiral clamp) starts a fresh
-// window, so every logged line covers uninterrupted play.
-#if defined(PLATFORM_ANDROID)
-#include <android/log.h>
-#define SIMSTATS_LOG(...) __android_log_print(ANDROID_LOG_INFO, "opencheckers", __VA_ARGS__)
-#else
-#define SIMSTATS_LOG(...) do { printf(__VA_ARGS__); printf("\n"); fflush(stdout); } while (0)
-#endif
-
-static void simstats_count(double now, int steps) {
-    static double win_start, last_call;
-    static int frames, sim_steps;
-    if (last_call == 0.0 || now - last_call > 0.25) { // gap: not continuous play
-        win_start = now;
-        frames = 0;
-        sim_steps = 0;
-    }
-    last_call = now;
-    frames++;
-    sim_steps += steps;
-    double span = now - win_start;
-    if (span >= 1.0) {
-        SIMSTATS_LOG("SIMSTATS window=%.3f frames=%d steps=%d", span, frames, sim_steps);
-        win_start = now;
-        frames = 0;
-        sim_steps = 0;
-    }
-}
-#endif // OC_SIMSTATS
-
 // App state carried across frames. Kept in one struct so the web build can drive
 // the loop from an emscripten per-frame callback (browsers can't block) and iOS
 // from a CADisplayLink.
@@ -166,12 +129,6 @@ static void app_ctx_init(AppCtx* c) {
     c->ai_wait = AI_DELAY;
     sim_clock_reset(&c->clock);
     c->prev_time = 0.0;
-#ifdef OC_AUTOPLAY
-    // Validation builds skip the menu and start playing at boot (see SIMSTATS
-    // in the Makefile); the AI plays both sides.
-    c->game = game_create(c->diff, c->human);
-    c->state = STATE_PLAYING;
-#endif
 }
 
 static void start_new_game(AppCtx* c) {
@@ -325,15 +282,8 @@ static void frame_step(void* arg) {
 
         game_frame_begin(g);
         int steps = sim_clock_advance(&c->clock, dt);
-#ifdef OC_SIMSTATS
-        simstats_count(now, steps);
-#endif
 
-#ifdef OC_AUTOPLAY
-        bool ai_turn = true;   // validation builds: the AI plays both sides
-#else
         bool ai_turn = (g->turn != g->human);
-#endif
         if (g->phase == PHASE_PLAYING && ai_turn) {
             // AI turn (brief "thinking" delay, then a full move)
             c->sel_r = c->sel_c = -1;
@@ -355,15 +305,8 @@ static void frame_step(void* arg) {
     }
 
     case STATE_GAMEOVER:
-#ifdef OC_AUTOPLAY
-        // Validation builds restart immediately so an unattended device run
-        // measures play for its whole duration.
-        start_new_game(c);
-        break;
-#else
         if (in.any_pressed && !in.fullscreen_toggle) { c->state = STATE_MENU; c->selected = 0; }
         break;
-#endif
     }
 
     // Render once per frame, after the update (every frame reaches the end of

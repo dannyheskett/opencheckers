@@ -137,8 +137,8 @@ make ios       # -> build/opencheckers.ipa           (device arm64, unsigned)
 ```
 
 The `.ipa` is unsigned unless `IOS_SIGN_IDENTITY` / `IOS_PROFILE` / `IOS_TEAM_ID`
-are set; AWS Device Farm re-signs an unsigned one on upload. C sources build with
-`clang`, the Objective-C++ backend (`ios/`) with `clang++`.
+are set. C sources build with `clang`, the Objective-C++ backend (`ios/`) with
+`clang++`.
 
 ### Web (needs Emscripten)
 
@@ -160,13 +160,6 @@ surface):
 ```bash
 make test
 ```
-
-There is also a real-device engine check: `make android SIMSTATS=1` builds an
-APK that boots straight into autoplay (the AI plays both sides) and logs
-rendered-frames vs sim-steps once per second; the manual
-[`devicefarm`](.github/workflows/devicefarm.yml) workflow (with `simstats`
-enabled and a 120 Hz `device_model`) runs it on AWS Device Farm and fails unless
-the simulation held ~60 steps/s at the display's real refresh rate.
 
 ## Continuous integration and releases
 
